@@ -1,4 +1,4 @@
-name: Test OmniRoute limited CPU+RAM
+name: Test OmniRoute limited CPU+RAM+Disk
 
 on:
   workflow_dispatch:
@@ -10,27 +10,59 @@ jobs:
       - name: Pull image
         run: docker pull diegosouzapw/omniroute:latest
 
-      - name: Run with 0.1 CPU + 512MB RAM (simulate Render Free)
+      - name: Find container's block device
         run: |
+          df -h /
+          lsblk || true
+
+      - name: Run with throttled CPU + RAM + Disk I/O
+        run: |
+          DEV=$(df --output=source / | tail -1)
+          MAJMIN=$(lsblk -no MAJ:MIN "$DEV" 2>/dev/null | head -1)
+          echo "Using device $DEV ($MAJMIN) for I/O throttling"
+
           docker run -d --name omniroute \
             --cpus="0.1" \
             -m 512m --memory-swap 512m \
+            --device-read-bps "${DEV}:1mb" \
+            --device-write-bps "${DEV}:1mb" \
+            --device-read-iops "${DEV}:50" \
+            --device-write-iops "${DEV}:50" \
             -p 20128:20128 \
             -e PORT=20128 \
             -e DASHBOARD_PORT=20128 \
-            diegosouzapw/omniroute:latest
-          
+            diegosouzapw/omniroute:latest || echo "THROTTLED RUN FAILED TO START: $?"
+
           echo "Waiting up to 90s, checking status every 10s..."
           for i in $(seq 1 9); do
             sleep 10
-            STATUS=$(docker inspect omniroute --format='{{.State.Status}}')
+            STATUS=$(docker inspect omniroute --format='{{.State.Status}}' 2>/dev/null || echo "no-container")
             echo "[${i}0s] Status: $STATUS"
             if [ "$STATUS" != "running" ]; then
               break
             fi
           done
-          
+
           echo "----- Final container status -----"
-          docker inspect omniroute --format='Status: {{.State.Status}}, ExitCode: {{.State.ExitCode}}, OOMKilled: {{.State.OOMKilled}}, Error: {{.State.Error}}'
+          docker inspect omniroute --format='Status: {{.State.Status}}, ExitCode: {{.State.ExitCode}}, OOMKilled: {{.State.OOMKilled}}, Error: {{.State.Error}}' 2>/dev/null || echo "inspect failed"
           echo "----- Logs -----"
-          docker logs omniroute
+          docker logs omniroute 2>&1 || echo "no logs"
+
+      - name: Also test with tiny tmpfs (simulate small/limited ephemeral disk)
+        if: always()
+        run: |
+          docker rm -f omniroute 2>/dev/null || true
+          docker run -d --name omniroute2 \
+            --cpus="0.1" \
+            -m 512m --memory-swap 512m \
+            --tmpfs /app/data:size=64m \
+            -p 20128:20128 \
+            -e PORT=20128 \
+            -e DASHBOARD_PORT=20128 \
+            diegosouzapw/omniroute:latest || echo "TMPFS RUN FAILED TO START: $?"
+
+          sleep 40
+          echo "----- tmpfs test status -----"
+          docker inspect omniroute2 --format='Status: {{.State.Status}}, ExitCode: {{.State.ExitCode}}' 2>/dev/null || echo "inspect failed"
+          echo "----- tmpfs test logs -----"
+          docker logs omniroute2 2>&1 || echo "no logs"
