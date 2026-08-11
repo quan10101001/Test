@@ -1,4 +1,4 @@
-name: Test OmniRoute on limited RAM
+name: Test OmniRoute limited CPU+RAM
 
 on:
   workflow_dispatch:
@@ -10,19 +10,27 @@ jobs:
       - name: Pull image
         run: docker pull diegosouzapw/omniroute:latest
 
-      - name: Check image architecture
-        run: docker inspect diegosouzapw/omniroute:latest --format='{{.Architecture}}'
-
-      - name: Run with 512MB RAM limit (simulate Render Free)
+      - name: Run with 0.1 CPU + 512MB RAM (simulate Render Free)
         run: |
           docker run -d --name omniroute \
+            --cpus="0.1" \
             -m 512m --memory-swap 512m \
             -p 20128:20128 \
             -e PORT=20128 \
             -e DASHBOARD_PORT=20128 \
             diegosouzapw/omniroute:latest
-          sleep 35
-          echo "----- Container status -----"
-          docker inspect omniroute --format='Status: {{.State.Status}}, ExitCode: {{.State.ExitCode}}, OOMKilled: {{.State.OOMKilled}}'
+          
+          echo "Waiting up to 90s, checking status every 10s..."
+          for i in $(seq 1 9); do
+            sleep 10
+            STATUS=$(docker inspect omniroute --format='{{.State.Status}}')
+            echo "[${i}0s] Status: $STATUS"
+            if [ "$STATUS" != "running" ]; then
+              break
+            fi
+          done
+          
+          echo "----- Final container status -----"
+          docker inspect omniroute --format='Status: {{.State.Status}}, ExitCode: {{.State.ExitCode}}, OOMKilled: {{.State.OOMKilled}}, Error: {{.State.Error}}'
           echo "----- Logs -----"
           docker logs omniroute
