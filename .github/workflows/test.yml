@@ -1,0 +1,28 @@
+name: Test OmniRoute on limited RAM
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Pull image
+        run: docker pull diegosouzapw/omniroute:latest
+
+      - name: Check image architecture
+        run: docker inspect diegosouzapw/omniroute:latest --format='{{.Architecture}}'
+
+      - name: Run with 512MB RAM limit (simulate Render Free)
+        run: |
+          docker run -d --name omniroute \
+            -m 512m --memory-swap 512m \
+            -p 20128:20128 \
+            -e PORT=20128 \
+            -e DASHBOARD_PORT=20128 \
+            diegosouzapw/omniroute:latest
+          sleep 35
+          echo "----- Container status -----"
+          docker inspect omniroute --format='Status: {{.State.Status}}, ExitCode: {{.State.ExitCode}}, OOMKilled: {{.State.OOMKilled}}'
+          echo "----- Logs -----"
+          docker logs omniroute
